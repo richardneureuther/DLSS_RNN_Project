@@ -1,0 +1,119 @@
+---
+title: "Prelim_NCES_Data"
+format: html
+editor: visual
+---
+```{r}
+#load packages 
+library(tidyverse)
+library(readxl)
+```
+
+```{r}
+#load NCES data
+NCES <-  read_xlsx("NCES_Initial_Clean.xlsx")
+```
+
+
+```{r}
+#load Metro Micro labels
+metro_labels <- read.csv("Metro_Micro_Areas.csv", colClasses = "character")
+```
+
+
+```{r}
+#create copy of NCES
+NCES_clean <- NCES
+#replace NCES na with proper ones
+NCES_clean <- NCES_clean %>%
+  mutate(across(everything(), ~na_if(.x, "†"))) %>%
+  mutate(across(everything(), ~na_if(.x, "–"))) %>%
+  mutate(across(everything(), ~na_if(.x, "‡")))
+#convert metro N/A to proper  N/A
+NCES_clean <- NCES_clean %>%
+  mutate(across(starts_with("Metro"), ~na_if(.x, "N/A")))
+```
+
+```{r}
+#remove all rows where FIPS is N/A
+NCES_clean <- NCES_clean %>%
+  filter(!is.na(FIPS))
+
+#head 10 0f NCES
+nces_smol <- head(NCES_clean,10)
+```
+
+```{r}
+#check number of unique entires in the FIPS codes
+length(unique(NCES_clean$FIPS))
+```
+
+```{r}
+#convert all but the few meta data columns to numeric
+cols_to_convert <- setdiff(names(NCES_clean), c("Agency Name", "state_name", "state_abbr", "county_name","FIPS"))
+
+# Convert selected columns to numeric (suppress warnings for NAs)
+NCES_clean[cols_to_convert] <- lapply(NCES_clean[cols_to_convert], function(x) as.numeric(gsub(",", "", x))) 
+```
+
+```{r}
+NCES_county <- NCES_clean %>%
+  group_by(FIPS) %>%
+  summarise(across(all_of(cols_to_convert), ~sum(.x, na.rm = TRUE)))
+
+```
+
+```{r}
+# Get unique metadata (first occurrence per FIPS)
+county_metadata <- NCES %>%
+  select(FIPS, county_name, state_name, state_abbr) %>%
+  distinct(FIPS, .keep_all = TRUE)
+
+# Join with aggregated data
+NCES_county <- left_join(county_metadata, NCES_county, by = "FIPS")
+
+```
+
+```{r}
+#check number of NA
+sum(is.na(NCES_county))
+```
+```{r}
+summary(metro_labels)
+```
+```{r}
+#create 5 digit FIPS code from the state and county FIPS
+metro_labels$FIPS <- paste0(metro_labels$FIPS_state, metro_labels$FIPS_county)
+
+#remove redundnat rows
+metro_labels <- metro_labels %>%
+  select(-FIPS_state, -FIPS_county,-county_name,-state_name )
+
+#rename clunky column name
+names(metro_labels)[names(metro_labels) == 'Metropolitan.Micropolitan.Statistical.Area'] <- 'Metro_Micro'
+
+#make Metro_Micro a boolean
+metro_labels <- metro_labels %>%
+  mutate(Metro_Micro = ifelse(Metro_Micro == "Metropolitan Statistical Area", 1, 0))
+
+```
+
+```{r}
+summary(NCES_county)
+summary(metro_labels)
+```
+```{r}
+NCES_complete <- NCES_county %>%
+  left_join(metro_labels, by = "FIPS") %>%
+  relocate(any_of(names(metro_labels)), .before = 1)
+
+NCES_complete <- NCES_complete %>%
+  relocate(county_name, FIPS, .before = 1)
+```
+
+```{r}
+#export as csv
+write_csv(NCES, "NCES_cleaned.csv")
+write_csv(nces_smol, "NCES_smol.csv")
+```
+
