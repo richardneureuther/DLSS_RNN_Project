@@ -52,11 +52,12 @@ length(unique(NCES_clean$FIPS))
 #convert all but the few meta data columns to numeric
 cols_to_convert <- setdiff(names(NCES_clean), c("Agency Name", "state_name", "state_abbr", "county_name","FIPS"))
 
-# Convert selected columns to numeric (suppress warnings for NAs)
+#convert relevant columns
 NCES_clean[cols_to_convert] <- lapply(NCES_clean[cols_to_convert], function(x) as.numeric(gsub(",", "", x))) 
 ```
 
 ```{r}
+#summ up converted columns
 NCES_county <- NCES_clean %>%
   group_by(FIPS) %>%
   summarise(across(all_of(cols_to_convert), ~sum(.x, na.rm = TRUE)))
@@ -64,12 +65,12 @@ NCES_county <- NCES_clean %>%
 ```
 
 ```{r}
-# Get unique metadata (first occurrence per FIPS)
+#fetch unique county metadata
 county_metadata <- NCES %>%
   select(FIPS, county_name, state_name, state_abbr) %>%
   distinct(FIPS, .keep_all = TRUE)
 
-# Join with aggregated data
+join
 NCES_county <- left_join(county_metadata, NCES_county, by = "FIPS")
 
 ```
@@ -81,6 +82,7 @@ sum(is.na(NCES_county))
 ```{r}
 summary(metro_labels)
 ```
+
 ```{r}
 #create 5 digit FIPS code from the state and county FIPS
 metro_labels$FIPS <- paste0(metro_labels$FIPS_state, metro_labels$FIPS_county)
@@ -95,7 +97,6 @@ names(metro_labels)[names(metro_labels) == 'Metropolitan.Micropolitan.Statistica
 #make Metro_Micro a boolean
 metro_labels <- metro_labels %>%
   mutate(Metro_Micro = ifelse(Metro_Micro == "Metropolitan Statistical Area", 1, 0))
-
 ```
 
 ```{r}
@@ -109,11 +110,134 @@ NCES_complete <- NCES_county %>%
 
 NCES_complete <- NCES_complete %>%
   relocate(county_name, FIPS, .before = 1)
+
+#remove first row
+NCES_complete <- NCES_complete[-1, ]
+```
+```{r}
+NCES_complete
 ```
 
 ```{r}
 #export as csv
-write_csv(NCES, "NCES_cleaned.csv")
-write_csv(nces_smol, "NCES_smol.csv")
+write_csv(NCES_complete, "NCES_aggregated.csv")
+write_csv(metro_labels, "Metro_Areas_Labels.csv")
 ```
+
+```{r}
+#get NCES back
+NCES <- read_csv("NCES_aggregated.csv")
+```
+```{r}
+summary(NCES)
+```
+```{r}
+#head 10 of NCES
+nces_smol <- head(NCES, 10)
+nces_smol
+```
+
+
+```{r}
+#identifier columns)
+id_cols <- c("county_name", "FIPS", "CBSA_Code", "CSA_Code", "CBSA_name", 
+             "Metro_Micro", "CSA_name", "state_name", "state_abbr")
+
+#create consistent year variable
+NCES_long <- NCES %>%
+  pivot_longer(
+    cols = -all_of(id_cols),
+    names_to = c("variable", "year"),
+    names_sep = "_(?=\\d{4}-\\d{2})",
+    values_to = "value"
+  ) %>%
+  mutate(value = as.numeric(value)) %>% 
+  pivot_wider(
+    names_from = variable,
+    values_from = value
+  )
+
+#check new data frame 
+glimpse(NCES_long)
+```
+
+```{r}
+#export NCES_long as csv
+write_csv(NCES_long, "NCES_aggregated_long.csv")
+```
+
+```{r}
+#import NCES long dataset
+NCES_long <- read_csv("NCES_aggregated_long.csv")
+```
+```{r}
+#remove all rows that have N/A in the CBSA_name column
+NCES_area <- NCES_long %>%
+  filter(!is.na(CBSA_name))
+```
+
+```{r}
+#helper fucntion that checks whether all values being summed up are N/A. To keep distiction between 0 and NA
+safe_sum <- function(x) {
+  if (all(is.na(x))) {
+    return(NA_real_)
+  } else {
+    return(sum(x, na.rm = TRUE))
+  }
+}
+```
+
+
+```{r}
+#aggregate from county to CBSA level
+NCES_cbsa <- NCES_area %>%
+  group_by(CBSA_Code, CBSA_name, year) %>%
+  summarise(
+    total_students = safe_sum(total_students),
+    diploma_recipients = safe_sum(diploma_recipients),
+    enterprise_operations = safe_sum(enterprise_operations),
+    food_services = safe_sum(food_services),
+    instruction_expenditures = safe_sum(instruction_expenditures),
+    non_specified = safe_sum(non_specified),
+    other_non_instructional = safe_sum(other_non_instructional),
+    general_admin = safe_sum(general_admin),
+    instr_staff_support = safe_sum(instr_staff_support),
+    ops_maint = safe_sum(ops_maint),
+    other_support = safe_sum(other_support),
+    admin = safe_sum(admin),
+    transportation = safe_sum(transportation),
+    student_support = safe_sum(student_support),
+    .groups = "drop"
+  )
+```
+
+```{r}
+#check number of uniqe entries in CBSA codes
+length(unique(NCES_cbsa$CBSA_name))
+```
+
+```{r}
+#add back the metro labels
+#clean metro labels
+metro_labels_clean <- metro_labels %>%
+  mutate(CBSA_Code = as.numeric(CBSA_Code)) %>%
+  select(CBSA_Code, Metro_Micro) %>%
+  distinct(CBSA_Code, .keep_all = TRUE)  
+
+#join
+NCES_cbsa_final <- NCES_cbsa %>%
+  left_join(metro_labels_clean, by = "CBSA_Code")
+```
+
+```{r}
+#metroc micro level in front
+NCES_cbsa_final <- NCES_cbsa_final %>%
+  relocate(Metro_Micro, .before = 4)
+```
+
+```{r}
+#export as csv
+write_csv(NCES_cbsa_final, "NCES_cbsa.csv")
+```
+
 
